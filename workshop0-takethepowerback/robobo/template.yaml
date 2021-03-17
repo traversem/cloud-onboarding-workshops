@@ -1,0 +1,213 @@
+---
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+  instanceTypeParam:
+    Type: AWS::SSM::Parameter::Name
+    Default: /cloudOnboarding/workshop/0/instanceType
+  vpcIdParam:
+    Type: AWS::SSM::Parameter::Name
+    Default: /cloudOnboarding/workshop/0/vpcId
+  securityGroupIdsParam:
+    Type: AWS::SSM::Parameter::Name
+    Default: /cloudOnboarding/workshop/0/securityGroupIds
+  subnetIdParam:
+    Type: AWS::SSM::Parameter::Name
+    Default: /cloudOnboarding/workshop/0/subnetId
+  linuxAmiParam:
+    Type: AWS::SSM::Parameter::Name
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  windowsAmiParam:
+    Type: AWS::SSM::Parameter::Name
+    Default: /aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base
+  alexaSkillIdParam:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /cloudOnboarding/workshop/0/alexaSkillId
+Globals:
+  Function:
+    Handler: lambda_function.lambda_handler
+    Runtime: python3.8
+    MemorySize: 128
+    Timeout: 30
+Resources:
+  startPipeline:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/launcher/
+      Description: launcher function
+      Environment:
+        Variables:
+          linuxAmiParameter: !Ref linuxAmiParam
+          windowsAmiParameter: !Ref windowsAmiParam
+          instanceTypeParameter: !Ref instanceTypeParam
+          vpcIdParameter: !Ref vpcIdParam
+          securityGroupIdsParameter: !Ref securityGroupIdsParam
+          subnetIdParameter: !Ref subnetIdParam
+          deploymentPipelineParameter: !Ref deploymentPipelineParameter
+          nameTableParameter: !Ref nameTableParameter
+      Events:
+        alexaEvent:
+          Properties:
+            SkillId: !Ref alexaSkillIdParam
+          Type: AlexaSkill
+      Policies:
+        -
+          Version: 2012-10-17
+          Statement:
+            -
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${instanceTypeParam}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${vpcIdParam}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${subnetIdParam}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${securityGroupIdsParam}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${deploymentPipelineParameter}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${nameTableParameter}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:*:parameter${linuxAmiParam}'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:*:parameter${windowsAmiParam}'
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt deploymentPipeline.Name
+
+  runInstances:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/runInstances
+      Description: instance deployment function
+      Policies:
+        - EC2DescribePolicy: {}
+        -
+          Version: 2012-10-17
+          Statement:
+            -
+              Effect: Allow
+              Action:
+                - ec2:RunInstances
+                - ec2:CreateTags
+              Resource: '*'
+
+  iterator:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/iterator
+      Description: build iterator function
+
+  generateName:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/generateName
+      Description: generate instance name function
+
+  verifyNameUniqueness:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/verifyNameUniqueness
+      Description: check instance name is unique
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref nameTable
+
+  reserveName:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/reserveName
+      Description: reserve instance name
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref nameTable
+
+  commitName:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/commitName
+      Description: commit instance name
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref nameTable
+
+  deploymentPipeline:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: checkPayload
+        States:
+          checkPayload:
+            Type: Pass
+            Next: iterator
+          iterator:
+            Type: Task
+            Resource: !GetAtt iterator.Arn
+            Next: executionMap
+          executionMap:
+            Type: Map
+            MaxConcurrency: 10
+            Iterator:
+              StartAt: generateName
+              States:
+                generateName:
+                  Type: Task
+                  ResultPath: $.instanceName
+                  Resource: !GetAtt generateName.Arn
+                  Next: verifyNameUniqueness
+                verifyNameUniqueness:
+                  Type: Task
+                  ResultPath: $.instanceNameInUse
+                  Resource: !GetAtt verifyNameUniqueness.Arn
+                  Next: reserveName
+                reserveName:
+                  Type: Task
+                  ResultPath: null
+                  Resource: !GetAtt reserveName.Arn
+                  Next: runInstances
+                runInstances:
+                  Type: Task
+                  ResultPath: null
+                  Resource: !GetAtt runInstances.Arn
+                  Next: commitName
+                commitName:
+                  Type: Task
+                  ResultPath: null
+                  OutputPath: $.instanceName
+                  Resource: !GetAtt commitName.Arn
+                  End: true
+            Next: returnResponse
+          returnResponse:
+            Type: Pass
+            End: true
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref runInstances
+        - LambdaInvokePolicy:
+            FunctionName: !Ref iterator
+        - LambdaInvokePolicy:
+            FunctionName: !Ref generateName
+        - LambdaInvokePolicy:
+            FunctionName: !Ref verifyNameUniqueness
+        - LambdaInvokePolicy:
+            FunctionName: !Ref reserveName
+        - LambdaInvokePolicy:
+            FunctionName: !Ref commitName
+
+  deploymentPipelineParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: state machine pipeline arn
+      Name: /cloudOnboarding/workshop/0/stateMachineArn
+      Tier: Standard
+      Type: String
+      Value: !Ref deploymentPipeline
+
+  nameTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      SSESpecification:
+        SSEEnabled: true
+
+  nameTableParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: dynamo table
+      Name: /cloudOnboarding/workshop/0/dynamoTable
+      Tier: Standard
+      Type: String
+      Value: !Ref nameTable

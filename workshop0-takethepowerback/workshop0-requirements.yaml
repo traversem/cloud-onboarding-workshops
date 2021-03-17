@@ -1,0 +1,78 @@
+---
+Parameters:
+  instanceType:
+    Type: String
+    Default: t3.micro
+  vpcId:
+    Type: String
+  securityGroupIds:
+    Type: String
+  subnetId:
+    Type: String
+  alexaSkillId:
+    Type: String
+
+Resources:
+  s3SamBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          -
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  s3SamBucketParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /cloudOnboarding/workshop/0/s3SamBucket
+      Tier: Standard
+      Type: String
+      Value: !Ref s3SamBucket
+
+  instanceTypeParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: ec2 instance type
+      Name: /cloudOnboarding/workshop/0/instanceType
+      Tier: Standard
+      Type: String
+      Value: !Ref instanceType
+
+  vpcIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: ec2 instance type
+      Name: /cloudOnboarding/workshop/0/vpcId
+      Tier: Standard
+      Type: String
+      Value: !Ref vpcId
+
+  securityGroupIdsParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: security group ids
+      Name: /cloudOnboarding/workshop/0/securityGroupIds
+      Tier: Standard
+      Type: StringList
+      Value: !Ref securityGroupIds
+
+  subnetIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: subnet id
+      Name: /cloudOnboarding/workshop/0/subnetId
+      Tier: Standard
+      Type: String
+      Value: !Ref subnetId
+
+  alexaSkillIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: alexa skill id
+      Name: /cloudOnboarding/workshop/0/alexaSkillId
+      Tier: Standard
+      Type: String
+      Value: !Ref alexaSkillId
+
+
